@@ -1,7 +1,4 @@
 # iAirport
-iAirport
-========
-
 Description
 -----------
 iAirport is a tool that leverages information from both the Mac OS X system-tool iairport as well as the debug logs located in /var/log/wifi.log.
