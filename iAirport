@@ -29,7 +29,7 @@ use strict;
 use warnings;
 use Time::HiRes qw(time);
 use Term::ANSIColor qw(:constants);
-#use POSIX;
+use POSIX;
 
 
 
