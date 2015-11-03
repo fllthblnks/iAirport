@@ -1,0 +1,402 @@
+#!/usr/bin/perl
+# File: iAirport
+# Date: 2015/04/01
+# Desc: MAC OS X Wi-Fi analyser 
+# Auth: Guillaume Germain (ggermain@gmail.com) 
+#
+# Licensed under the MIT License (MIT)
+#
+# Copyright (c) 2015 Guillaume Germain
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this 
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to the following 
+# conditions:
+#
+# The above copyright notice and this permission notice shall be included in all copies 
+# or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR 
+# PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE 
+# LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
+# TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE 
+# USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+use strict;
+use warnings;
+use Time::HiRes qw(time);
+use Term::ANSIColor qw(:constants);
+#use POSIX;
+
+
+
+$| = 1;
+my $version = '1.1.0';
+my ($macOSXversion, $macOSXbuild, %data, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG, $output_file);
+my $multiline_read = 0;
+$data{"OLD_BSSID"} = "";
+
+## You can specify the name of the log file if you wish
+$output_file = "./iAirport.log";
+my $are_we_logging;
+
+
+
+my $bytes_transfered = 0;
+my $elapsed_time = 0;
+my $bytes_before = &readInterfaceBytes;
+
+
+
+### Which version of Mac OS X are we running? 
+foreach my $line (`sw_vers`){
+	my @t = split(" ", $line);
+	if($t[0] =~ /ProductVersion/){
+		$macOSXversion = $t[1];
+	}
+	if($t[0] =~ /BuildVersion/){
+		$macOSXbuild = $t[1];
+	}
+}
+
+
+
+### Print start header
+print "Welcome to iAirport v$version written by Guillaume Germain.\n";
+print "You are using Mac OS X version $macOSXversion build $macOSXbuild\n\n";
+
+
+## Option Handler
+my $argv_string = join(" ", @ARGV);
+if($argv_string ne ""){
+	if($argv_string =~ /-h/ || $argv_string =~ /--help/){
+
+		print "Options:\n\n";
+		print "-v\t High verbosity\n";
+		print "-l\t Logs roams to iAirport.log\n";
+		print "-d\t Toggles debugging on the system and quits. Command must be run as root\n\n";
+		exit();
+
+	}else{
+
+		if($argv_string =~ /\-d/){
+			if(&isDebugEnabled()){
+				&debugOff();
+			}else{
+				&debugOn();
+			}
+			exit();
+
+		}
+
+
+		# Verbosity
+		if($argv_string =~ /v/){	
+			print "Running in verbose mode\n";
+		}
+
+		# Logging
+		if($argv_string =~ /l/){
+			print "Saving to log to $output_file\n";
+			$are_we_logging = 1;
+			open($LOG, ">>" . $output_file);
+		}
+
+	}
+}
+
+if(!&isDebugEnabled()){
+	print "\nDebugging is currently partially or entirely disabled.\n";
+	print "This script will still provide information on roams, but it is much more useful with debugging enabled.\n\n";
+        print "You can enable it by running this script with the -d option.\n\n";
+}
+
+# Open /var/log/wifi.log and seek to end of file
+open($WIFILOG, "/var/log/wifi.log");
+my @tmp = <$WIFILOG>;
+
+
+
+# Stepping in the main loop
+while(1){
+
+	my $bytes_total = &readInterfaceBytes;
+	my $bytes = $bytes_total - $bytes_before;
+	$bytes_transfered += $bytes;
+	$bytes_before = $bytes_total;
+
+	# Processing 'airport -I' information 
+	&airport;  
+
+	# Processing /var/log/wifi.log information
+	&wifiLogMunch;
+
+
+	# Making it look nice
+	if($off == 1){
+		print BOLD, RED, &hrs . "  \tWi-Fi is off\n", RESET;
+		$off++;
+	}else{
+		if(!defined($data{'OLD_BSSID'})){ $data{"OLD_BSSID"} = ""; }
+		if($data{'BSSID'} eq $data{'OLD_BSSID'}){
+			print "     \r";
+			$jl = 1;
+		}else{
+			$jl = 0;
+			print "\n";
+		}
+		if(defined($data{'SSID'})){
+			print BOLD, GREEN, &hrs . "  \tESSID \"" . $data{'SSID'} . "\" (" . $data{'BSSID'} . ") Chan " . $data{'channel'} . " MCS " . $data{'MCS'} . " (" . $data{'lastTxRate'} . " mbps)\tRSSI " . $data{'agrCtlRSSI'} . " NF " . $data{'agrCtlNoise'} . " SNR " . $data{'SNR'} . " " . &speedReport(($bytes * 8), $bytes_transfered) , RESET;
+
+			if($are_we_logging){
+				print $LOG time . "," . join(",", ($data{'SSID'}, $data{'BSSID'}, $data{'channel'}, $data{'MCS'}, $data{'lastTxRate'}, $data{'agrCtlRSSI'}, $data{'agrCtlNoise'})) . "\n";
+			}
+		}else{
+			print BOLD, YELLOW, &hrs . " Not connected", RESET;
+		}
+	}
+
+
+	sleep 1; 
+}
+
+### Function to format the date and time
+sub hrs{
+	my ($sec, $min, $hr, $day, $mon, $year) = localtime;
+	return sprintf("%04d/%02d/%02d %02d:%02d:%02d", 
+		1900 + $year, $mon + 1, $day, $hr, $min, $sec);
+
+}
+
+
+### Function to parse /var/log/wifi.log
+sub wifiLogMunch{
+	foreach my $line (<$WIFILOG>){
+
+		if($line =~ /logfile turned over due to size/){
+			close($WIFILOG);
+			open($WIFILOG, '/var/log/wifi.log');
+		}
+
+		# Verbose mode
+		if(defined($ARGV[0])){
+			if($jl){ print "\n"; $jl = 0; }
+			print $line;
+			next;
+		}
+
+
+
+		# Ignoring the following
+		if($line =~ /WiFiCloudSyncEngineCopyLogStatementCallback/ ||
+			$line =~ /airportdProcessSystemConfigurationEvent/ || 
+			$line =~ /\<Wi\-Fi Menu Extra/ ||
+			$line =~ /\<airportd\[(\d+)\]\>\ Adding network/ || 
+			$line =~ /Driver Event:/ ||
+			$line =~ /QUERY SCAN CACHE/ ||
+			$line =~ /TETHER DEVICE/ || 
+			$line =~ /GAS CACHE/ ||
+			$line =~ /SCAN request received/ ||
+			$line =~ /\_SC\_callback\: Changed keys/ || 
+			$line =~ /IO80211ScanManager\:\:/){
+			next;
+		}
+
+
+		if($line =~ /\<airportd\[(\d+)\]\> Successful cache-assisted background/ ||
+			$line =~ /\<airportd\[(\d+)\]\> Successful cache-assisted scan request for com.apple.wifi.proxy with channels/){
+			$multiline_read = 'scan'; 
+			$data{'channel_scan'} = "";
+			next;
+		}
+
+		if($multiline_read eq "scan"){
+			if($line =~ /\)\} took /){
+				$line =~ s/^(.+)\)\}//;
+
+				if($jl){ print "\n"; $jl = 0; }
+				print "Scanned channels " . $data{'channel_scan'} . $line;
+				$multiline_read = "";
+				next;
+			}else{
+
+				$line =~ /channelNumber\=([0-9]+)/;
+				$data{'channel_scan'} .= $1 . " ";
+				next;
+			} 
+		}
+
+
+
+		if($line =~ /IO80211ScanManager/){
+			next; 
+		}
+
+
+		if($jl){ print "\n"; $jl = 0; }
+		print $line;    
+
+
+
+
+
+	}
+
+
+	seek $WIFILOG, 0, 1;
+}
+
+
+
+
+sub airport{
+
+	$data{'OLD_BSSID'} = $data{'BSSID'};
+
+	my @airport_output = `/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport -I`;
+
+	if($airport_output[0] =~ /AirPort: Off/){
+		$off = 1;
+	}else{
+		$off = 0;
+		if(!defined($data{'agrCtlRSSI'}) && defined($data{'agrCtlNoise'})){
+			$data{'SNR'} = '0';
+		}
+
+	}
+
+	foreach my $arg (@airport_output){
+		$arg =~ s/^(\W+)//;
+		chomp($arg);
+		my @t = split(": ", $arg);
+
+		$data{$t[0]} = $t[1];
+	}
+
+	if(defined($data{'agrCtlRSSI'})){
+		$data{'SNR'} = $data{'agrCtlRSSI'} - $data{'agrCtlNoise'};
+	}
+
+}
+
+
+
+
+
+
+sub readInterfaceBytes{
+
+	my @val = `netstat -ibn | grep en0`;
+	my @tmp_splt = split(" ", $val[0]);
+
+	#en0   1500  10.59/19      10.59.24.194     5705156     - 7106275157  3259759     -  443173671     -
+	return $tmp_splt[6] + $tmp_splt[9];
+
+}
+
+
+### Format speed report
+sub speedReport{
+	my ($speed,$dataTransfered) = @_;
+
+
+	return " Speed: " . &frmtUnit($speed) . "bps Data: " . &frmtUnit($dataTransfered) . "     ";
+}
+
+
+### Formats the unit with speed value
+sub frmtUnit{
+	my $qty = $_[0];
+
+	if($qty == 0){ return 0; }
+	elsif($qty < 999){ return $qty . "B"}
+	elsif($qty < 999999){ return sprintf("%.0f", ($qty / 1024)) . "K"; }
+	elsif($qty < 999999999){ return sprintf("%.1f", (($qty / 1024) / 1024)) . "M"; }
+	elsif($qty < 999999999999){ return sprintf("%.1f", ((($qty / 1024) / 1024) / 1024)) . "G"; }
+}
+
+sub isDebugEnabled{
+	my @d = `/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug`;
+
+	if(@d == 0){
+		return 0;
+	}
+
+	my %debug_arg = ("DriverDiscovery" => 1,
+		"DriverEvent" => 1, 
+		"Info" => 1, 
+		"SystemConfiguration" => 1,
+		"UserEvent" => 1, 
+		"PreferredNetworks" => 1,
+		"AutoJoin" => 1, 
+		"IPC" => 1, 
+		"Scan" => 1, 
+		"802.1x" => 1, 
+		"Assoc" => 1, 
+		"Keychain" => 1, 
+		"RSNAuth" => 1, 
+		"WoW" => 1, 
+		"P2P" => 1, 
+		"Roam" => 1, 
+		"Offload" => 1,
+		"LogFile" => 1, 
+		"DriverInfo" => 1, 
+		"DriverError" => 1, 
+		"DriverWPA" => 1, 
+		"DriverScan" => 1, 
+		"VendorAssoc" => 1, 
+		"VendorConnection" => 1);
+
+	my $all_there = 1;
+
+
+	foreach my $element (@d){
+		chomp($element);
+		if(!defined($debug_arg{$element})){
+			$all_there--;
+			print '.' . $element . ".\n";
+		}
+	}
+
+
+	if($all_there == 1){
+		# Debugging is enabled
+		return 1; 
+	}else{
+		# Debugging is disabled
+		return 0;
+	}
+
+}
+
+
+sub debugOn{
+
+	if($> == 0){
+		`/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug +AllUserLand +AllDriver +AllVendor +LogFile -BTCoex`;
+
+		print "Debugging is now enabled\n\n";
+	}else{
+		print "Debugging is currently not enabled on the system or is partially enabled.\n\n";
+		print "To enable debugging on the system, run the following command:\n\n";
+		print "\tsudo /System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug +AllUserLand +AllDriver +AllVendor +LogFile -BTCoex\n\n";
+		print "Or run this script with the -d option as root and we will do it for you.\n";
+	}
+}
+
+sub debugOff{
+
+	if($> == 0){
+		`/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug -AllUserLand -AllDriver -AllVendor -LogFile`;
+
+		print "Debugging is now disabled\n\n";
+	}else{
+		print "Debugging is currently enabled, to disable debugging on the system, run the following command:\n\n";
+		print "\tsudo /System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug -AllUserLand -AllDriver -AllVendor -LogFile\n\n";
+		print "Or run this script with the -d option as root and we will do it for you.\n";
+	}
+}
+
