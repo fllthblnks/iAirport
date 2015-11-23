@@ -1,8 +1,8 @@
 #!/usr/bin/perl
-# File: iAirport
-# Date: 2015/04/01
-# Desc: MAC OS X Wi-Fi analyser 
-# Auth: Guillaume Germain (ggermain@gmail.com) 
+# File:        iAirport
+# Date:        2015/11/03
+# Description: MAC OS X Wi-Fi analyser 
+# Author:      Guillaume Germain (ggermain@gmail.com) 
 #
 # Licensed under the MIT License (MIT)
 #
@@ -29,19 +29,20 @@ use strict;
 use warnings;
 use Time::HiRes qw(time);
 use Term::ANSIColor qw(:constants);
-use POSIX;
 
 
 
 $| = 1;
-my $version = '1.1.0';
-my ($macOSXversion, $macOSXbuild, %data, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG, $output_file);
+my $version = '1.1.1';
+my ($macOSXversion, $macOSXbuild, %data, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG);
+my ($are_we_logging, $output_file);
 my $multiline_read = 0;
 $data{"OLD_BSSID"} = "";
 
 ## You can specify the name of the log file if you wish
 $output_file = "./iAirport.log";
-my $are_we_logging;
+my $oui_data_file = "oui.txt";
+my %oui_data = &ouiRead($oui_data_file);
 
 
 
@@ -149,7 +150,7 @@ while(1){
 			print "\n";
 		}
 		if(defined($data{'SSID'})){
-			print BOLD, GREEN, &hrs . "  \tESSID \"" . $data{'SSID'} . "\" (" . $data{'BSSID'} . ") Chan " . $data{'channel'} . " MCS " . $data{'MCS'} . " (" . $data{'lastTxRate'} . " mbps)\tRSSI " . $data{'agrCtlRSSI'} . " NF " . $data{'agrCtlNoise'} . " SNR " . $data{'SNR'} . " " . &speedReport(($bytes * 8), $bytes_transfered) , RESET;
+			print BOLD, GREEN, &hrs . "  \t\"" . $data{'SSID'} . "\" (" . &macToVendor($data{'BSSID'}) . $data{'BSSID'} . ") Chan " . $data{'channel'} . " MCS " . $data{'MCS'} . " (" . $data{'lastTxRate'} . " mbps)\tRSSI " . $data{'agrCtlRSSI'} . " NF " . $data{'agrCtlNoise'} . " SNR " . $data{'SNR'} . " " . &speedReport(($bytes * 8), $bytes_transfered) , RESET;
 
 			if($are_we_logging){
 				print $LOG time . "," . join(",", ($data{'SSID'}, $data{'BSSID'}, $data{'channel'}, $data{'MCS'}, $data{'lastTxRate'}, $data{'agrCtlRSSI'}, $data{'agrCtlNoise'})) . "\n";
@@ -181,6 +182,27 @@ sub wifiLogMunch{
 			open($WIFILOG, '/var/log/wifi.log');
 		}
 
+		# Detecting deauth
+		if($line =~ /Received Deauth from (([0-9a-f]{1,2}[\.:-]){5}([0-9a-f]{1,2})) with Reason (\d+)/i){
+			my $deauth_source = $1;
+			$line =~ /with Reason (\d+)/;
+			my $reason_code = $1;
+
+			if($jl){ print "\n"; $jl = 0; }
+
+			# If reason code is 3, it could be a client match move attempt.
+			if($reason_code eq "3"){
+				print BOLD, RED,  &hrs . " Received DEAUTH from $deauth_source with Reason code $reason_code (Could be a ClientMatch move)", RESET, "\n";
+			}else{
+				print BOLD, RED,  &hrs . " Received DEAUTH from $deauth_source with Reason code $reason_code", RESET, "\n";
+			}
+
+
+			next;
+		}
+
+
+
 		# Verbose mode
 		if(defined($ARGV[0])){
 			if($jl){ print "\n"; $jl = 0; }
@@ -204,6 +226,7 @@ sub wifiLogMunch{
 			$line =~ /IO80211ScanManager\:\:/){
 			next;
 		}
+
 
 
 		if($line =~ /\<airportd\[(\d+)\]\> Successful cache-assisted background/ ||
@@ -357,7 +380,6 @@ sub isDebugEnabled{
 		chomp($element);
 		if(!defined($debug_arg{$element})){
 			$all_there--;
-			print '.' . $element . ".\n";
 		}
 	}
 
@@ -397,6 +419,56 @@ sub debugOff{
 		print "Debugging is currently enabled, to disable debugging on the system, run the following command:\n\n";
 		print "\tsudo /System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug -AllUserLand -AllDriver -AllVendor -LogFile\n\n";
 		print "Or run this script with the -d option as root and we will do it for you.\n";
+	}
+}
+
+# Read oui datafile
+sub ouiRead{
+	my $file = shift;
+	my %oui_mac;
+
+	open(FIC, $file) or do {
+		print "OUI data file ($file) is missing. Will not have vendor information displayed.\n";
+		return;
+	};
+
+	foreach my $line (<FIC>){
+		if($line =~ /^#/){
+			next;
+		}
+
+		if($line =~ /((([0-9a-f]){2}\:){2}([0-9a-f]){2})\s/i){
+			my @t = split(" ", $line);
+
+			$oui_mac{$t[0]} = $t[1];
+		}
+
+	}
+
+	close(FIC);
+	return %oui_mac;
+}
+
+
+sub macToVendor{
+  	my $mac = shift;
+  	my $out;
+
+	my @t = split(":", $mac);
+
+	foreach my $i (@t){
+		if(length($i) == 1){
+			$out .= "0" . $i . ":";
+		}else{
+			$out .= $i . ":";
+		}
+  	}
+
+	my $oui_to_search = substr($out, 0, 8);
+
+	if(!defined($oui_data{uc $oui_to_search})){ return ""; }
+	else{
+		return $oui_data{uc $oui_to_search} . " ";
 	}
 }
 
