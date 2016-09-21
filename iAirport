@@ -34,16 +34,17 @@ use Term::ANSIColor qw(:constants);
 
 $| = 1;
 my $version = '1.1.1';
-my ($macOSXversion, $macOSXbuild, %data, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG);
-my ($are_we_logging, $output_file);
+my ($macOSXversion, $macOSXbuild, %data, %dataLast, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG, $BSSID);
+my ($are_we_logging, $output_file, $bssid_list_file, %BSSID_list);
 my $multiline_read = 0;
+$are_we_logging = 1;
 $data{"OLD_BSSID"} = "";
 
 ## You can specify the name of the log file if you wish
 $output_file = "./iAirport.log";
+$bssid_list_file = "./bssid_list.txt";
 my $oui_data_file = "oui.txt";
 my %oui_data = &ouiRead($oui_data_file);
-
 
 
 my $bytes_transfered = 0;
@@ -101,12 +102,17 @@ if($argv_string ne ""){
 
 		# Logging
 		if($argv_string =~ /l/){
-			print "Saving to log to $output_file\n";
+			print "Saving to log to $output_file and roams to $bssid_list_file\n";
 			$are_we_logging = 1;
-			open($LOG, ">>" . $output_file);
 		}
 
 	}
+}
+
+if($are_we_logging == 1){
+  open($LOG, ">>" . $output_file);
+  open($BSSID, ">>" . $bssid_list_file);
+
 }
 
 if(!&isDebugEnabled()){
@@ -136,6 +142,7 @@ while(1){
 	&wifiLogMunch;
 
 
+
 	# Making it look nice
 	if($off == 1){
 		print BOLD, RED, &hrs . "  \tWi-Fi is off\n", RESET;
@@ -146,8 +153,12 @@ while(1){
 			print "     \r";
 			$jl = 1;
 		}else{
+			$BSSID_list{$data{'BSSID'}} = 1;
 			$jl = 0;
 			print "\n";
+			if($data{'BSSID'} ne "0:0:0:0:0:0" && $are_we_logging){
+				print $BSSID $data{'BSSID'} . "\n";
+			}
 		}
 		if(defined($data{'SSID'})){
 			print BOLD, GREEN, &hrs . "  \t\"" . $data{'SSID'} . "\" (" . &macToVendor($data{'BSSID'}) . $data{'BSSID'} . ") Chan " . $data{'channel'} . " MCS " . $data{'MCS'} . " (" . $data{'lastTxRate'} . " mbps)\tRSSI " . $data{'agrCtlRSSI'} . " NF " . $data{'agrCtlNoise'} . " SNR " . $data{'SNR'} . " " . &speedReport(($bytes * 8), $bytes_transfered) , RESET;
@@ -177,7 +188,7 @@ sub hrs{
 sub wifiLogMunch{
 	foreach my $line (<$WIFILOG>){
 
-		if($line =~ /logfile turned over due to size/){
+		if($line =~ /logfile turned over/){
 			close($WIFILOG);
 			open($WIFILOG, '/var/log/wifi.log');
 		}
@@ -307,7 +318,10 @@ sub airport{
 
 
 
+sub defaultGW{
+  my $tmp = `netstat -arn | grep default`;
 
+}
 
 
 sub readInterfaceBytes{
