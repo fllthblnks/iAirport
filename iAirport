@@ -33,12 +33,14 @@ use Term::ANSIColor qw(:constants);
 
 
 $| = 1;
-my $version = '1.1.1';
+my $version = '1.1.2';
 my ($macOSXversion, $macOSXbuild, %data, %dataLast, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG, $BSSID);
 my ($are_we_logging, $output_file, $bssid_list_file, %BSSID_list);
 my $multiline_read = 0;
 $are_we_logging = 1;
 $data{"OLD_BSSID"} = "";
+
+my $AIRPORT_PATH = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport";
 
 ## You can specify the name of the log file if you wish
 $output_file = "./iAirport.log";
@@ -102,7 +104,7 @@ if($argv_string ne ""){
 
 		# Logging
 		if($argv_string =~ /l/){
-			print "Saving to log to $output_file and roams to $bssid_list_file\n";
+			print "Saving /var/log/wifi.log to $output_file and roams to $bssid_list_file\n";
 			$are_we_logging = 1;
 		}
 
@@ -156,6 +158,7 @@ while(1){
 			$BSSID_list{$data{'BSSID'}} = 1;
 			$jl = 0;
 			print "\n";
+			&displayNotif('Roamed to ' . $data{'BSSID'});
 			if($data{'BSSID'} ne "0:0:0:0:0:0" && $are_we_logging){
 				print $BSSID $data{'BSSID'} . "\n";
 			}
@@ -192,6 +195,18 @@ sub wifiLogMunch{
 			close($WIFILOG);
 			open($WIFILOG, '/var/log/wifi.log');
 		}
+	
+		# DHCP Latency
+		# Mon Jul 17 20:00:20.295 Info: <airportd[77]> -[CWXPCSubsystem internal_submitIPConfigLatencyMetric:leaseDuration:]: IPConfig Latency metric data: CWAWDMetricIPConfigLatencyData: DHCP latency: 10054 msecs, duration: 60 mins, security: 2
+		#
+		if($line =~ /internal_submitIPConfigLatencyMetric/){
+			$line =~ /DHCP latency: ([\d]+)/;
+			$data{'DhcpLatency'} = $1;
+			$line =~ /duration: ([^,]+)/;
+			$data{'DhcpLeaseTime'} = $1;
+			my @s = split(" ", $line);
+			$data{'DhcpLastUpdateTime'} = $s[3];
+		}
 
 		# Detecting deauth
 		if($line =~ /Received Deauth from (([0-9a-f]{1,2}[\.:-]){5}([0-9a-f]{1,2})) with Reason (\d+)/i){
@@ -218,6 +233,7 @@ sub wifiLogMunch{
 		if(defined($ARGV[0])){
 			if($jl){ print "\n"; $jl = 0; }
 			print $line;
+			print $LOG $line;
 			next;
 		}
 
@@ -290,7 +306,7 @@ sub airport{
 
 	$data{'OLD_BSSID'} = $data{'BSSID'};
 
-	my @airport_output = `/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport -I`;
+	my @airport_output = `$AIRPORT_PATH -I`;
 
 	if($airport_output[0] =~ /AirPort: Off/){
 		$off = 1;
@@ -392,6 +408,7 @@ sub isDebugEnabled{
 
 	foreach my $element (@d){
 		chomp($element);
+		if($element eq "BTCoex"){ next; }
 		if(!defined($debug_arg{$element})){
 			$all_there--;
 		}
@@ -400,7 +417,7 @@ sub isDebugEnabled{
 
 	if($all_there == 1){
 		# Debugging is enabled
-		return 1; 
+		return 2; 
 	}else{
 		# Debugging is disabled
 		return 0;
@@ -412,7 +429,7 @@ sub isDebugEnabled{
 sub debugOn{
 
 	if($> == 0){
-		`/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug +AllUserLand +AllDriver +AllVendor +LogFile -BTCoex`;
+		`$AIRPORT_PATH debug +AllUserLand +AllDriver +AllVendor +LogFile -BTCoex`;
 
 		print "Debugging is now enabled\n\n";
 	}else{
@@ -426,7 +443,7 @@ sub debugOn{
 sub debugOff{
 
 	if($> == 0){
-		`/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug -AllUserLand -AllDriver -AllVendor -LogFile`;
+		`$AIRPORT_PATH debug -AllUserLand -AllDriver -AllVendor -LogFile`;
 
 		print "Debugging is now disabled\n\n";
 	}else{
@@ -486,3 +503,9 @@ sub macToVendor{
 	}
 }
 
+
+sub displayNotif{
+	my $msg = shift;
+
+	`osascript -e 'display notification "$msg" with title "iAirport"'`;
+}
