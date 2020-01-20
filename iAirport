@@ -33,7 +33,7 @@ use Term::ANSIColor qw(:constants);
 
 
 $| = 1;
-my $version = '1.1.2';
+my $version = '1.2.1';
 my ($macOSXversion, $macOSXbuild, %data, %dataLast, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG, $BSSID);
 my ($are_we_logging, $output_file, $bssid_list_file, %BSSID_list);
 my $multiline_read = 0;
@@ -147,10 +147,11 @@ while(1){
 
 	# Making it look nice
 	if($off == 1){
-		print BOLD, RED, &hrs . "  \tWi-Fi is off\n", RESET;
+		print BOLD, RED, &hrs . " Wi-Fi is off", RESET;
+        print "     \r";
 		$off++;
 	}else{
-		if(!defined($data{'OLD_BSSID'})){ $data{"OLD_BSSID"} = ""; }
+		if(!defined($data{'OLD_BSSID'})){ $data{"OLD_BSSID"} = "0:0:0:0:0:0"; }
 		if($data{'BSSID'} eq $data{'OLD_BSSID'}){
 			print "     \r";
 			$jl = 1;
@@ -158,9 +159,12 @@ while(1){
 			$BSSID_list{$data{'BSSID'}} = 1;
 			$jl = 0;
 			print "\n";
-			&displayNotif('Roamed to ' . $data{'BSSID'});
-			if($data{'BSSID'} ne "0:0:0:0:0:0" && $are_we_logging){
-				print $BSSID $data{'BSSID'} . "\n";
+			if($data{'BSSID'} ne "0:0:0:0:0:0"){
+                &roamedToNotif();
+                #&displayNotif('Roamed to ' . $data{'BSSID'}, 'BSSID');
+                if($are_we_logging){
+				    print $BSSID $data{'BSSID'} . "\n";
+                }
 			}
 		}
 		if(defined($data{'SSID'})){
@@ -206,6 +210,9 @@ sub wifiLogMunch{
 			$data{'DhcpLeaseTime'} = $1;
 			my @s = split(" ", $line);
 			$data{'DhcpLastUpdateTime'} = $s[3];
+            
+
+            print BOLD, CYAN, &hrs . " " . $line, RESET, "\n";
 		}
 
 		# Detecting deauth
@@ -372,7 +379,7 @@ sub frmtUnit{
 }
 
 sub isDebugEnabled{
-	my @d = `/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport debug`;
+	my @d = `$AIRPORT_PATH debug`;
 
 	if(@d == 0){
 		return 0;
@@ -400,24 +407,30 @@ sub isDebugEnabled{
 		"DriverError" => 1, 
 		"DriverWPA" => 1, 
 		"DriverScan" => 1, 
-		"VendorAssoc" => 1, 
-		"VendorConnection" => 1);
+		"VendorAssoc" => 1);
+
+
 
 	my $all_there = 1;
 
 
 	foreach my $element (@d){
-		chomp($element);
+        chomp($element);
 		if($element eq "BTCoex"){ next; }
-		if(!defined($debug_arg{$element})){
-			$all_there--;
-		}
+        $debug_arg{$element} = 2;
 	}
 
 
+    foreach my $element (keys %debug_arg){
+        if($debug_arg{$element} == 1){
+            $all_there = 0;
+        }
+
+    }
+
 	if($all_there == 1){
 		# Debugging is enabled
-		return 2; 
+		return 1; 
 	}else{
 		# Debugging is disabled
 		return 0;
@@ -504,8 +517,22 @@ sub macToVendor{
 }
 
 
+sub roamedToNotif(){
+    my $msg;
+    
+
+
+    &displayNotif("SSID:\t" . $data{'SSID'} . "\r\n" .
+                  "BSSID:\t" . $data{'BSSID'} . "\r\n" .
+                  "Channel:\t" . $data{'channel'}, "roam");
+
+
+}
+
+
 sub displayNotif{
 	my $msg = shift;
+    my $type = shift;
 
-	`osascript -e 'display notification "$msg" with title "iAirport"'`;
+	`osascript -e 'display notification "$msg" with title "iAirport $type"'`;
 }
