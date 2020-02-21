@@ -215,6 +215,12 @@ sub wifiLogMunch{
             print BOLD, CYAN, &hrs . " " . $line, RESET, "\n";
 		}
 
+
+        if($line =~ /manageProblematicNetworks/){
+
+            print BOLD, RED, &hrs . " " . $line, RESET, "\n";
+        }
+
 		# Detecting deauth
 		if($line =~ /Received Deauth from (([0-9a-f]{1,2}[\.:-]){5}([0-9a-f]{1,2})) with Reason (\d+)/i){
 			my $deauth_source = $1;
