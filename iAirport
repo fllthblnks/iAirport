@@ -37,7 +37,7 @@ my $version = '1.2.1';
 my ($macOSXversion, $macOSXbuild, %data, %dataLast, $off, %scan, @toScreen, $jl, $WIFILOG, $LOG, $BSSID);
 my ($are_we_logging, $output_file, $bssid_list_file, %BSSID_list);
 my $multiline_read = 0;
-$are_we_logging = 1;
+$are_we_logging = 0;
 $data{"OLD_BSSID"} = "";
 
 my $AIRPORT_PATH = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/A/Resources/airport";
